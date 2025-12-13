@@ -72,7 +72,7 @@ class Pose(Enum):
     SPH = (11, "特殊ヒキ", "sphiki.jpg") 
     
     def __new__(cls, order, value, image_suffix):
-        obj = object.__new__(cls)
+        obj = object().__new__(cls)
         obj._value_ = value
         obj.order = order
         obj.image_suffix = image_suffix
@@ -325,9 +325,10 @@ def load_data(initial_load=False):
 
 
 # --- 3. 函數區：單張/批量操作 ---
+# V8.9.6 修正: 從所有回調函數中移除 st.rerun()
 
 def update_photo_and_save():
-    """處理圖片張數/檔案上傳的變更並儲存 (主要用於 on_change 觸發，尤其是檔案上傳)"""
+    """處理圖片張數/檔案上傳的變更並儲存 (主要用於 on_change 觸發，尤其是檔案上傳/number_input)"""
     photo_id = st.session_state.get('last_updated_photo_id')
     if not photo_id:
         return 
@@ -349,38 +350,38 @@ def update_photo_and_save():
             file_type = uploaded_file.type
             base64_encoded_data = base64.b64encode(bytes_data).decode('utf-8')
             new_custom_image_source = f"data:{file_type};base64,{base64_encoded_data}"
-            
+        
+        # 如果 file_uploader 狀態是 None (但之前有 custom_image)，則不修改 custom_image_url。
+        # 只有在明確上傳新文件時才更新 new_custom_image_source。
+        
         is_changed = (
             new_count != updated_photo.owned_count or 
-            new_custom_image_source != updated_photo.custom_image_url
+            (new_custom_image_source is not None and new_custom_image_source != updated_photo.custom_image_url) 
         )
         
         if is_changed:
-            
-            # --- 修正點 1: 移除 st.session_state[f"file_uploader_{photo_id}"] = None ---
-            # Streamlit 不允許手動設定 file_uploader 的狀態
-            
             updated_photo.owned_count = new_count
             
-            updated_photo.custom_image_url = new_custom_image_source
-            updated_photo.image_url = new_custom_image_source if new_custom_image_source else updated_photo._generate_image_url()
+            if new_custom_image_source is not None:
+                updated_photo.custom_image_url = new_custom_image_source
+                updated_photo.image_url = new_custom_image_source
             
             save_data(st.session_state.photo_set, st.session_state.all_sets_by_group)
             
             st.session_state[f"count_{photo_id}_num_input"] = updated_photo.owned_count 
             
-            if uploaded_file is not None:
-                st.rerun() # 成功上傳後強制刷新，file_uploader 狀態會自動清空
-
+            # 這裡不呼叫 rerun，讓 Streamlit 自動處理 number_input 或 file_uploader 變更後的刷新
+            # file_uploader 成功上傳後會自行重置
+            
 
 def set_update_tracker(p_id):
-    """設置追蹤器，確保 on_change 能找到正確的 ID。主要用於 number_input 和 file_uploader。"""
+    """設置追蹤器，確保 on_change 能找到正確的 ID。用於 number_input 和 file_uploader。"""
     st.session_state['last_updated_photo_id'] = p_id
     update_photo_and_save()
 
 
 def decrement_count(p_id):
-    """將數量減 1，直接儲存並強制刷新。"""
+    """將數量減 1，只修改狀態並儲存，依賴 Streamlit 自動刷新。"""
     current_count = st.session_state.get(f"count_{p_id}_num_input", 0) 
     new_count = max(0, current_count - 1)
     
@@ -391,11 +392,10 @@ def decrement_count(p_id):
         if updated_photo:
             updated_photo.owned_count = new_count
             save_data(st.session_state.photo_set, st.session_state.all_sets_by_group)
-            st.rerun() 
-
+            # 移除 st.rerun()
 
 def increment_count(p_id):
-    """將數量加 1，直接儲存並強制刷新。"""
+    """將數量加 1，只修改狀態並儲存，依賴 Streamlit 自動刷新。"""
     current_count = st.session_state.get(f"count_{p_id}_num_input", 0)
     new_count = current_count + 1
     
@@ -406,10 +406,10 @@ def increment_count(p_id):
         if updated_photo:
             updated_photo.owned_count = new_count
             save_data(st.session_state.photo_set, st.session_state.all_sets_by_group)
-            st.rerun()
+            # 移除 st.rerun()
 
 def clear_custom_image(photo_id: str):
-    """清除自訂圖片的 Base64 數據，並將圖片 URL 重設為預設，直接儲存並強制刷新。"""
+    """清除自訂圖片的 Base64 數據，只修改狀態並儲存，依賴 Streamlit 自動刷新。"""
     
     updated_photo = next((ph for ph in st.session_state.photo_set if ph.id == photo_id), None)
     
@@ -417,17 +417,17 @@ def clear_custom_image(photo_id: str):
         updated_photo.custom_image_url = None
         updated_photo.image_url = updated_photo._generate_image_url()
         
-        # --- 修正點 2: 移除 st.session_state[f"file_uploader_{photo_id}"] = None ---
-        # Streamlit 不允許手動設定 file_uploader 的狀態
+        # 重置 file uploader 狀態在 Streamlit 中很複雜且不被推薦，
+        # 我們依賴於 Streamlit 自動刷新後 file_uploader 自身狀態的重置。
         
         save_data(st.session_state.photo_set, st.session_state.all_sets_by_group)
         
-        st.rerun() 
+        # 移除 st.rerun()
     else:
         st.info(f"ID: {photo_id} 的生寫真沒有設定自訂圖片。")
 
 def set_count_to_zero(photo_id: str):
-    """將指定的 Photo 張數設定為 0 並儲存，直接儲存並強制刷新。"""
+    """將指定的 Photo 張數設定為 0，只修改狀態並儲存，依賴 Streamlit 自動刷新。"""
     
     updated_photo = next((ph for ph in st.session_state.photo_set if ph.id == photo_id), None)
     
@@ -438,13 +438,13 @@ def set_count_to_zero(photo_id: str):
         
         save_data(st.session_state.photo_set, st.session_state.all_sets_by_group)
         
-        st.rerun() 
+        # 移除 st.rerun()
     else:
         st.info(f"ID: {photo_id} 的生寫真張數已是 0。")
 
 # 核心批量修正函數：set_n_sets_collected
 def set_n_sets_collected(member_name: str, current_set_name: str, target_n: int):
-    """將指定成員在指定系列中的所有生寫真張數設為目標套數 N"""
+    """將指定成員在指定系列中的所有生寫真張數設為目標套數 N，只修改狀態並儲存，依賴 Streamlit 自動刷新。"""
     
     if current_set_name == "所有系列總計":
         st.error("「所有系列總計」模式下無法進行一鍵設定，請選擇特定系列。")
@@ -456,32 +456,34 @@ def set_n_sets_collected(member_name: str, current_set_name: str, target_n: int)
     for photo in st.session_state.photo_set:
         if photo.member.name == member_name and photo.set_name == current_set_name:
             
+            # 只有在當前數量少於目標數量時才更新
             if photo.owned_count < target_count: 
                 photo.owned_count = target_count
                 photos_updated += 1
             
+            # 無論是否更新，都確保 session state 同步
             st.session_state[f"count_{photo.id}_num_input"] = photo.owned_count
             
     if photos_updated > 0:
         st.success(f"已將 **{member_name}** 在 **{current_set_name}** 中的 {photos_updated} 張生寫真數量設為 {target_count} (共 {target_n} 套)。")
         save_data(st.session_state.photo_set, st.session_state.all_sets_by_group)
-        st.rerun() 
+        # 移除 st.rerun()
         
     else:
         st.info(f"**{member_name}** 在 **{current_set_name}** 中的生寫真數量已達到或超過目標的 {target_n} 套，無需修改。")
 
 def toggle_pin_and_save(member_name: str):
-    """切換成員的釘選狀態並儲存 (實際只是觸發 st.rerun)"""
+    """切換成員的釘選狀態，依賴 Streamlit 自動刷新。"""
     
     current_pin_state = st.session_state.get(f"pin_{member_name}", False)
     st.session_state[f"pin_{member_name}"] = not current_pin_state
-    st.rerun()
+    # 移除 st.rerun()
 
 
 # --- 4. 函數區：管理系列 ---
 
 def set_manage_tab():
-    """設定當前選中的管理 Tab"""
+    """設定當前選中的管理 Tab (不強制刷新，讓 Streamlit 自動處理)"""
     new_tab_value = st.session_state.get("manage_radio_tabs")
     if new_tab_value:
         st.session_state.manage_tab_state = new_tab_value
@@ -494,13 +496,11 @@ def load_edit_set_data():
     """根據選中的系列 ID，將其成員和姿勢載入到 session_state 暫存變數中"""
     selected_edit_id = st.session_state.get("edit_set_id") 
 
-    if selected_edit_id:
-        if selected_edit_id == "所有系列總計":
-            st.session_state.edit_current_group_value = None
-            st.session_state.edit_current_members_with_poses = {} 
-            st.session_state.edit_selected_members = []
-            return 
-
+    if selected_edit_id and selected_edit_id != "所有系列總計":
+        
+        if "|" not in selected_edit_id:
+             return # 防止格式錯誤
+             
         group_value, set_name = selected_edit_id.split("|", 1)
         
         current_info = st.session_state.all_sets_by_group.get(group_value, {}).get(set_name, {})
@@ -542,8 +542,12 @@ def get_available_member_names(group_identifier: str) -> List[str]:
     
     return available_members
 
+# 設置狀態標記，用於觸發主程式碼中的 reload
+def trigger_data_reload():
+    st.session_state['data_needs_reload'] = True
+
 def add_new_set():
-    """新增系列邏輯 (確保數據同步與強制刷新)"""
+    """新增系列邏輯，設置狀態標記並保存。"""
     new_set_name = st.session_state.get("new_set_name_simple", "").strip() 
     new_group_value = st.session_state.get("new_set_group_simple")
 
@@ -571,11 +575,7 @@ def add_new_set():
     st.session_state.all_sets_by_group = current_sets
     save_data(st.session_state.photo_set, st.session_state.all_sets_by_group)
     
-    st.session_state.photo_set = load_data() 
-    st.session_state.all_sets_by_group_str = st.session_state.all_sets_by_group 
-    
-    st.success(f"成功新增系列: {new_set_name}！請接著設定成員和姿勢。")
-    
+    # 設定 UI 狀態，切換到編輯頁面
     st.session_state['tracking_set_id'] = new_set_id 
     st.session_state.manage_tab_state = "編輯/刪除現有系列" 
     st.session_state.manage_radio_tabs = "編輯/刪除現有系列" 
@@ -584,11 +584,17 @@ def add_new_set():
     if 'new_set_name_simple' in st.session_state:
         del st.session_state['new_set_name_simple']
         
-    st.rerun() 
+    # **重點：設置需要刷新狀態**
+    trigger_data_reload()
 
 def edit_existing_set():
-    """編輯系列邏輯 (確保強制刷新)"""
+    """編輯系列邏輯，設置狀態標記並保存。"""
     edit_set_id = st.session_state.get("edit_set_id") 
+    
+    if edit_set_id is None or "|" not in edit_set_id:
+         st.warning("請選擇要編輯的系列。")
+         return
+         
     group_value, set_name = edit_set_id.split("|", 1)
     
     selected_member_names = st.session_state.get('edit_selected_members', [])
@@ -606,9 +612,6 @@ def edit_existing_set():
                 new_members_with_poses[member_name] = cleaned_poses
                 total_poses_count += len(cleaned_poses)
 
-    if not edit_set_id:
-        st.warning("請選擇要編輯的系列。")
-        return
         
     if not new_members_with_poses:
         st.error("您必須為至少一位成員選擇姿勢。")
@@ -626,6 +629,7 @@ def edit_existing_set():
             "members_with_poses": new_members_with_poses 
         }
         
+        # 清理舊鍵 (兼容性處理)
         if "member_list" in st.session_state.all_sets_by_group[group_value][set_name]:
             del st.session_state.all_sets_by_group[group_value][set_name]["member_list"]
         if "poses" in st.session_state.all_sets_by_group[group_value][set_name]:
@@ -633,37 +637,35 @@ def edit_existing_set():
         
         save_data(st.session_state.photo_set, st.session_state.all_sets_by_group)
         
-        st.session_state.photo_set = load_data()
-        st.session_state.all_sets_by_group_str = st.session_state.all_sets_by_group
-        
         st.success(f"成功更新系列: {set_name}！總共設定了 {len(new_members_with_poses)} 位成員的 {total_poses_count} 張生寫真項目。" + ("數據已變更並重新計算。" if is_changed else "數據未變更，介面已更新。"))
         
         st.session_state['tracking_set_id'] = f"{group_value}|{set_name}"
-            
-        st.rerun()
+        
+        # **重點：設置需要刷新狀態**
+        trigger_data_reload()
 
 def hard_reload_after_delete():
-    """清除所有 Streamlit UI 狀態鍵，模擬頁面首次載入，並強制 st.rerun()"""
+    """清除所有 Streamlit UI 狀態鍵，模擬頁面首次載入，並強制 st.rerun() (主程式碼中檢查此標記)"""
     
     keys_to_delete = ["tracking_set_id", "edit_set_id", "manage_radio_tabs", 
                       "edit_current_group_value", "edit_current_members_with_poses", 
                       "edit_selected_members", 
                       "new_set_name_simple", "new_set_group_simple",
-                      "delete_success_flag", "confirm_delete"]
+                      "delete_success_flag", "confirm_delete", "reload_after_delete_trigger"]
     
     for key in set(keys_to_delete): 
         if key in st.session_state:
              del st.session_state[key]
              
     st.session_state.photo_set = load_data(initial_load=True)
-    
-    st.rerun()
+    st.session_state['final_reload_after_delete'] = True 
+    # 這裡的 st.rerun() 移到頂層檢查區塊
 
 def delete_existing_set_on_edit():
-    """刪除系列邏輯 (作為 on_click 函數執行)"""
+    """刪除系列邏輯，設置狀態標記並保存。"""
     delete_set_id = st.session_state.get("edit_set_id")
 
-    if not delete_set_id:
+    if not delete_set_id or "|" not in delete_set_id:
         st.session_state['delete_success_flag'] = "請選擇要刪除的系列。"
         return
 
@@ -681,9 +683,8 @@ def delete_existing_set_on_edit():
         if 'tracking_set_id' in st.session_state:
             del st.session_state['tracking_set_id']
             
-        st.session_state.photo_set = load_data() 
-        
         st.session_state['delete_success_flag'] = f"成功刪除系列: {set_name}！請點擊下方按鈕更新介面。"
+        st.session_state['reload_after_delete_trigger'] = True # 設置標記給 UI 顯示按鈕
         
     else:
         st.error(f"找不到要刪除的系列: {set_name}。團體鍵 {group_value} 驗證失敗。")
@@ -699,10 +700,13 @@ def format_set_display(option_id: str) -> str:
         return f"{parts[0]} - {parts[1]}"
     return option_id
 
-# 核心功能：計算收藏進度 (無變動)
+# 核心功能：計算收藏進度 (V8.9.5 增加姿勢細項統計)
 def calculate_progress(photos: List[Photo], selected_set: Optional[str] = None) -> Dict[str, Dict]:
-    """計算所有成員在指定系列中的收藏進度"""
+    """計算所有成員在指定系列中的收藏進度，並細化到每個姿勢的張數"""
     progress: Dict[str, Dict] = {}
+    
+    # 建立所有可能的姿勢名稱到初始計數的映射
+    initial_pose_stats = {pose.name: 0 for pose in Pose}
     
     filtered_photos = photos
     if selected_set and selected_set != "所有系列總計":
@@ -711,10 +715,21 @@ def calculate_progress(photos: List[Photo], selected_set: Optional[str] = None) 
     for photo in filtered_photos:
         name = photo.member.name
         if name not in progress:
-            progress[name] = {'group': photo.member.group.value, 'total_needed': 0, 'total_collected': 0}
+            # 初始化時，複製一份初始姿勢統計
+            progress[name] = {
+                'group': photo.member.group.value, 
+                'total_needed': 0, 
+                'total_collected': 0,
+                'pose_collected': initial_pose_stats.copy() 
+            }
         
         progress[name]['total_needed'] += 1 
         progress[name]['total_collected'] += photo.owned_count 
+        
+        # V8.9.5 新增: 統計每個姿勢的收集張數
+        pose_name = photo.pose.name
+        progress[name]['pose_collected'][pose_name] += photo.owned_count
+        
     return progress
 
 # --- 5. 初始化數據 ---
@@ -748,9 +763,33 @@ if 'edit_selected_members' not in st.session_state:
     
 if 'edit_set_id' not in st.session_state:
     st.session_state['edit_set_id'] = None
+    
+if 'data_needs_reload' not in st.session_state:
+    st.session_state['data_needs_reload'] = False
+    
+if 'final_reload_after_delete' not in st.session_state:
+    st.session_state['final_reload_after_delete'] = False
+    
 # --- 5. 初始化數據 結束 ---
 
-# --- 6. 側邊欄繪製函數 (無變動) ---
+# --- 6. 頂層強制刷新檢查 (V8.9.6 新增) ---
+# 只有在頂層檢查並呼叫 st.rerun() 才是有效的
+if st.session_state.get('data_needs_reload'):
+    # 重新載入數據，並更新 session state 中相關的系列列表
+    st.session_state.photo_set = load_data()
+    st.session_state.all_sets_by_group_str = st.session_state.all_sets_by_group
+    st.session_state['data_needs_reload'] = False # 重置標記，防止無限循環
+    st.rerun() # 在頂層呼叫 rerun
+    
+if st.session_state.get('final_reload_after_delete'):
+     st.session_state.photo_set = load_data()
+     st.session_state.all_sets_by_group_str = st.session_state.all_sets_by_group
+     st.session_state['final_reload_after_delete'] = False
+     st.rerun()
+# --- 頂層強制刷新檢查 結束 ---
+
+
+# --- 7. 側邊欄繪製函數 (無變動) ---
 def draw_sidebar_controls():
     """
     繪製側邊欄控制項，使用 st.container() 確保內容連貫。
@@ -765,32 +804,38 @@ def draw_sidebar_controls():
             for set_name in group_sets.keys():
                 all_set_options_ids.append(f"{group_value}|{set_name}")
             
-        all_set_options_ids.insert(0, "所有系列總計")
-        
+        # V8.9.7 修正: 只有在有系列時才加入 "所有系列總計" 選項
+        if all_set_options_ids:
+             all_set_options_ids.insert(0, "所有系列總計")
+             
         selected_tracking_set_id = st.session_state.get("tracking_set_id")
         
         if selected_tracking_set_id not in all_set_options_ids:
             if all_set_options_ids:
                 selected_tracking_set_id = all_set_options_ids[0]
             else:
-                selected_tracking_set_id = "所有系列總計"
+                # 確保在沒有任何系列時，selected_tracking_set_id 是 None 或空字串
+                selected_tracking_set_id = None 
 
         current_index = all_set_options_ids.index(selected_tracking_set_id) if selected_tracking_set_id in all_set_options_ids else 0
 
         selected_set_output_id = st.selectbox(
             "選擇要追蹤的系列:",
-            options=all_set_options_ids,
+            options=all_set_options_ids if all_set_options_ids else ["--- 請新增系列 ---"], # 處理空列表
             index=current_index,
             key="tracking_set_id",
-            format_func=format_set_display 
+            format_func=format_set_display,
+            disabled=not all_set_options_ids
         )
         
-        if selected_set_output_id == "所有系列總計":
+        if selected_set_output_id is None or selected_set_output_id == "--- 請新增系列 ---":
+            selected_set_name_for_app = None
+        elif selected_set_output_id == "所有系列總計":
             selected_set_name_for_app = "所有系列總計"
         else:
             selected_set_name_for_app = selected_set_output_id.split("|", 1)[1] 
 
-        if len(all_set_options_ids) <= 1:
+        if not all_set_options_ids:
             st.warning("目前沒有任何系列，請在「管理系列」區塊新增。")
 
         st.markdown("---")
@@ -805,10 +850,10 @@ def draw_sidebar_controls():
 # --- 側邊欄繪製函數結束 ---
 
 
-# --- 7. Streamlit APP 頁面佈局 ---
+# --- 8. Streamlit APP 頁面佈局 ---
 
 st.set_page_config(layout="wide", page_title="坂道生寫真收藏追蹤器")
-st.title("🌸 坂道生寫真收藏追蹤器 (V8.9.3 - 手機介面優化)")
+st.title("🌸 坂道生寫真收藏追蹤器 (V8.9.7 - 最終修正)")
 st.markdown("---")
 
 
@@ -818,39 +863,90 @@ with st.sidebar:
 
 
 # B. 收藏進度總覽 
-has_any_set = any(st.session_state.all_sets_by_group_str.values())
+has_any_set = selected_set is not None
 
-st.header(f"🎯 進度總覽: {selected_set}")
-progress_data = calculate_progress(st.session_state.photo_set, selected_set)
+st.header(f"🎯 進度總覽: {selected_set if selected_set else '無系列追蹤'}")
 
-progress_table_data = []
-for name, data in progress_data.items():
-    collected = data['total_collected']
-    needed = data['total_needed']
-    
-    completion_percentage = (min(collected, needed) / needed) * 100 if needed > 0 else 0
-    
-    progress_table_data.append({
-        "成員": name,
-        "目標/擁有": f"{needed} 張目標 / {collected} 張",
-        "完成度": completion_percentage,
-    })
+if has_any_set:
+    progress_data = calculate_progress(st.session_state.photo_set, selected_set)
 
-progress_table_data = sorted(progress_table_data, key=lambda x: x['完成度'], reverse=True)
+    # V8.9.5 修正：定義所有可能的姿勢欄位
+    POSE_COLUMNS_MAP = {
+        pose.name: f"{pose.value} 張數" for pose in sorted(Pose, key=lambda p: p.order)
+    }
+    all_pose_keys = list(POSE_COLUMNS_MAP.keys())
 
-if progress_table_data and has_any_set:
-    st.dataframe(
-        progress_table_data,
-        column_config={
-            "完成度": st.column_config.ProgressColumn(
-                "完成度",
-                format="%f%%",
-                min_value=0,
-                max_value=100,
-            ),
-        },
-        hide_index=True,
-    )
+
+    progress_table_data = []
+    for name, data in progress_data.items():
+        collected = data['total_collected']
+        needed = data['total_needed']
+        
+        completion_percentage = (min(collected, needed) / needed) * 100 if needed > 0 else 0
+        
+        row = {
+            "成員": name,
+        }
+        
+        # 動態加入姿勢張數
+        for pose_key in all_pose_keys:
+            header_name = POSE_COLUMNS_MAP[pose_key]
+            collected_count = data['pose_collected'].get(pose_key, 0)
+            row[header_name] = collected_count
+            
+        # 加入總計和完成度
+        row["總擁有張數"] = collected
+        row["總目標張數"] = needed
+        row["完成度"] = completion_percentage
+        
+        progress_table_data.append(row)
+
+    progress_table_data = sorted(progress_table_data, key=lambda x: x['完成度'], reverse=True)
+
+    if progress_table_data:
+        
+        # 設定 column_config
+        column_config_dict = {
+            "成員": st.column_config.TextColumn("成員"),
+        }
+        
+        # 姿勢欄位配置為 NumberColumn (V8.9.5 新增)
+        for pose_key, header_name in POSE_COLUMNS_MAP.items():
+            column_config_dict[header_name] = st.column_config.NumberColumn(
+                header_name,
+                format="%d",
+                help=f"已收集的 {pose_key} 張數"
+            )
+            
+        # 總計與完成度配置
+        column_config_dict["總擁有張數"] = st.column_config.NumberColumn(
+            "總擁有張數",
+            format="%d",
+            help="所有姿勢加總的實際擁有張數"
+        )
+        column_config_dict["總目標張數"] = st.column_config.NumberColumn(
+            "總目標張數",
+            format="%d",
+            help="所有姿勢加總的目標追蹤張數"
+        )
+        column_config_dict["完成度"] = st.column_config.ProgressColumn(
+            "完成度",
+            format="%f%%",
+            min_value=0,
+            max_value=100,
+        )
+        
+        # 決定表格顯示的順序
+        display_order = ["成員"] + list(POSE_COLUMNS_MAP.values()) + ["總擁有張數", "總目標張數", "完成度"]
+        
+        st.dataframe(
+            progress_table_data,
+            column_config=column_config_dict,
+            column_order=display_order,
+            hide_index=True,
+        )
+    else:
+         st.info("所選系列沒有任何生寫真項目被定義，請在「管理系列」區塊進行設定。")
 else:
      st.info("請在下方的「管理系列」區塊新增至少一個系列來開始追蹤。")
 
@@ -858,101 +954,200 @@ else:
 st.markdown("---")
 
 
-# C. 追蹤頁面 (V8.9.3 核心優化區塊)
+# C. 追蹤頁面
 
-member_objects_dict = {}
-current_set_photos = [p for p in st.session_state.photo_set if p.set_name == selected_set or selected_set == "所有系列總計"]
+if selected_set:
+    member_objects_dict = {}
+    current_set_photos = [p for p in st.session_state.photo_set if p.set_name == selected_set or selected_set == "所有系列總計"]
 
-for photo in st.session_state.photo_set:
-    if photo.member.name not in member_objects_dict:
-        member_objects_dict[photo.member.name] = photo.member
+    for photo in st.session_state.photo_set:
+        if photo.member.name not in member_objects_dict:
+            member_objects_dict[photo.member.name] = photo.member
+            
+    for photo in current_set_photos:
+        name = photo.member.name
+        photo.member.is_pinned = st.session_state.get(f"pin_{name}", False)
         
-for photo in current_set_photos:
-    name = photo.member.name
-    photo.member.is_pinned = st.session_state.get(f"pin_{name}", False)
-    
-member_groups = {}
-for photo in current_set_photos:
-    name = photo.member.name
-    if name not in member_groups:
-        member_groups[name] = []
-    member_groups[name].append(photo)
+    member_groups = {}
+    for photo in current_set_photos:
+        name = photo.member.name
+        if name not in member_groups:
+            member_groups[name] = []
+        member_groups[name].append(photo)
 
-member_names = sorted(
-    list(member_groups.keys()), 
-    key=lambda name: (not member_objects_dict[name].is_pinned, name)
-)
+    member_names = sorted(
+        list(member_groups.keys()), 
+        key=lambda name: (not member_objects_dict[name].is_pinned, name)
+    )
 
-if member_names:
-    tabs = st.tabs(member_names)
+    if member_names:
+        # 釘選切換按鈕
+        # 使用一個單獨的容器來裝載釘選按鈕，確保佈局不受 tabs 影響
+        with st.container():
+            st.markdown("#### 📌 成員快速切換 (點擊釘選)")
+            cols = st.columns(min(len(member_names), 6)) # 最多 6 欄
 
-    for i, name in enumerate(member_names):
-        member = member_objects_dict[name]
-        with tabs[i]: 
-            
-            # --- V8.9.3: 批量操作使用 Expander ---
-            current_collected = progress_data.get(name, {}).get('total_collected', 0)
-            st.markdown(f"## {name} - 總擁有張數: {current_collected} 張")
-            
-            with st.expander("🎯 設定目標套數並批量操作"):
+            for i, name in enumerate(member_names):
+                col = cols[i % len(cols)] 
+                is_pinned = st.session_state.get(f"pin_{name}", False)
                 
-                col_target, col_set_n = st.columns([0.5, 0.5])
+                pin_label = "📍" if is_pinned else ""
+                pin_type = "primary" if is_pinned else "secondary"
                 
-                with col_target:
-                    st.number_input(
-                        "目標擁有套數 N",
-                        min_value=1,
-                        value=1,
-                        key=f"target_n_{name}", 
-                        step=1, 
-                    )
-                    target_n = st.session_state[f"target_n_{name}"]
-                    
-                with col_set_n:
-                    st.markdown("<br>", unsafe_allow_html=True) 
+                with col:
                     st.button(
-                        f"一鍵收齊 {target_n} 套",
-                        key=f"set_n_btn_{name}", 
-                        on_click=set_n_sets_collected, 
-                        args=(name, selected_set, target_n), 
-                        type="primary",
+                        f"{pin_label} {name}", 
+                        key=f"pin_btn_{name}", 
+                        on_click=toggle_pin_and_save, 
+                        args=(name,), 
+                        type=pin_type,
                         use_container_width=True
                     )
-                    
-            st.markdown("---") 
-            # -------------------- 成員生寫真列表 --------------------
-            
-            photos_for_member = sorted(
-                member_groups[name], 
-                key=lambda p: (p.pose.order, p.set_name if selected_set == "所有系列總計" else "")
-            )
+                
+        st.markdown("<hr>", unsafe_allow_html=True) # 分隔釘選列和 Tab
 
-            # 顯示
-            if selected_set == "所有系列總計":
-                # 在 "所有系列總計" 模式下，按系列分組顯示
-                grouped_by_set = {}
-                for p in photos_for_member:
-                    if p.set_name not in grouped_by_set:
-                        grouped_by_set[p.set_name] = []
-                    grouped_by_set[p.set_name].append(p)
-                    
-                set_names_sorted = sorted(grouped_by_set.keys())
+        tabs = st.tabs(member_names)
 
-                for set_name in set_names_sorted:
-                    st.subheader(f"系列: {set_name}")
+        for i, name in enumerate(member_names):
+            member = member_objects_dict[name]
+            with tabs[i]: 
+                
+                # --- V8.9.3: 批量操作使用 Expander ---
+                current_collected = progress_data.get(name, {}).get('total_collected', 0)
+                st.markdown(f"## {name} - 總擁有張數: {current_collected} 張")
+                
+                with st.expander("🎯 設定目標套數並批量操作"):
                     
-                    # V8.9.3: 在總計模式下，每張卡片仍使用行動友好的垂直佈局 (佔滿寬度)
-                    for photo in grouped_by_set[set_name]:
+                    if selected_set == "所有系列總計":
+                        st.warning("⚠️ 在「所有系列總計」模式下無法進行一鍵收齊操作。請在側邊欄選擇特定系列。")
+                    else:
+                        col_target, col_set_n = st.columns([0.5, 0.5])
+                        
+                        with col_target:
+                            st.number_input(
+                                "目標擁有套數 N",
+                                min_value=1,
+                                value=1,
+                                key=f"target_n_{name}", 
+                                step=1, 
+                            )
+                            target_n = st.session_state[f"target_n_{name}"]
+                            
+                        with col_set_n:
+                            st.markdown("<br>", unsafe_allow_html=True) 
+                            st.button(
+                                f"一鍵收齊 {target_n} 套",
+                                key=f"set_n_btn_{name}", 
+                                on_click=set_n_sets_collected, 
+                                args=(name, selected_set, target_n), 
+                                type="primary",
+                                use_container_width=True
+                            )
+                            
+                st.markdown("---") 
+                # -------------------- 成員生寫真列表 --------------------
+                
+                photos_for_member = sorted(
+                    member_groups[name], 
+                    key=lambda p: (p.pose.order, p.set_name if selected_set == "所有系列總計" else "")
+                )
+
+                # 顯示
+                if selected_set == "所有系列總計":
+                    # 在 "所有系列總計" 模式下，按系列分組顯示
+                    grouped_by_set = {}
+                    for p in photos_for_member:
+                        if p.set_name not in grouped_by_set:
+                            grouped_by_set[p.set_name] = []
+                        grouped_by_set[p.set_name].append(p)
+                        
+                    set_names_sorted = sorted(grouped_by_set.keys())
+
+                    for set_name in set_names_sorted:
+                        st.subheader(f"系列: {set_name}")
+                        
+                        for photo in grouped_by_set[set_name]:
+                            
+                            with st.container(border=True): 
+                                
+                                col_image, col_controls = st.columns([0.6, 0.4]) 
+                                
+                                with col_image:
+                                    st.image(photo.image_url, caption=f"姿勢: **{photo.pose.value}** (ID: {photo.id})") 
+                                
+                                with col_controls:
+                                    # 數量輸入和 +/- 按鈕分三欄顯示
+                                    col_dec, col_input, col_inc = st.columns([0.25, 0.5, 0.25])
+                                    
+                                    count_key = f"count_{photo.id}_num_input"
+                                    if count_key not in st.session_state:
+                                        st.session_state[count_key] = photo.owned_count
+
+                                    with col_dec:
+                                        st.button(
+                                            "➖", 
+                                            key=f"dec_{photo.id}", 
+                                            on_click=decrement_count, 
+                                            args=(photo.id,),
+                                            use_container_width=True,
+                                            type="secondary"
+                                        )
+                                    
+                                    with col_input:
+                                        st.number_input(
+                                            "張數", 
+                                            min_value=0,
+                                            value=st.session_state[count_key],
+                                            key=count_key,
+                                            step=1,
+                                            on_change=set_update_tracker,
+                                            args=(photo.id,),
+                                            label_visibility="collapsed",
+                                            help=f"張數: {photo.pose.value}", 
+                                        )
+                                        
+                                    with col_inc:
+                                        st.button(
+                                            "➕", 
+                                            key=f"inc_{photo.id}", 
+                                            on_click=increment_count, 
+                                            args=(photo.id,), 
+                                            type="primary",
+                                            use_container_width=True
+                                        )
+                                    
+                                    # 額外功能 
+                                    with st.expander("🛠️ 自訂圖片 / 清除"):
+                                        file_key = f"file_uploader_{photo.id}"
+                                        st.file_uploader(
+                                            "上傳自訂圖片 (JPG/PNG)",
+                                            type=["jpg", "jpeg", "png"],
+                                            key=file_key,
+                                            on_change=set_update_tracker, 
+                                            args=(photo.id,),
+                                            accept_multiple_files=False,
+                                            label_visibility="collapsed"
+                                        )
+                                        col_clear_img, col_clear_count = st.columns(2)
+                                        if photo.custom_image_url:
+                                            with col_clear_img:
+                                                st.button("清除圖片", key=f"clear_img_{photo.id}", on_click=clear_custom_image, args=(photo.id,), use_container_width=True)
+                                        with col_clear_count:
+                                            st.button("清零張數", key=f"set_zero_{photo.id}", on_click=set_count_to_zero, args=(photo.id,), use_container_width=True)
+
+
+                else:
+                    # 單一系列模式下的行動友善佈局
+                    for photo in photos_for_member:
                         
                         with st.container(border=True): 
                             
                             col_image, col_controls = st.columns([0.6, 0.4]) 
                             
                             with col_image:
-                                st.image(photo.image_url, caption=f"姿勢: **{photo.pose.value}** (ID: {photo.id})") 
+                                st.image(photo.image_url, caption=f"姿勢: **{photo.pose.value}**") 
                             
                             with col_controls:
-                                # 數量輸入和 +/- 按鈕分三欄顯示
                                 col_dec, col_input, col_inc = st.columns([0.25, 0.5, 0.25])
                                 
                                 count_key = f"count_{photo.id}_num_input"
@@ -991,8 +1186,7 @@ if member_names:
                                         type="primary",
                                         use_container_width=True
                                     )
-                                
-                                # 額外功能 
+
                                 with st.expander("🛠️ 自訂圖片 / 清除"):
                                     file_key = f"file_uploader_{photo.id}"
                                     st.file_uploader(
@@ -1011,79 +1205,11 @@ if member_names:
                                     with col_clear_count:
                                         st.button("清零張數", key=f"set_zero_{photo.id}", on_click=set_count_to_zero, args=(photo.id,), use_container_width=True)
 
-
-            else:
-                # V8.9.3: 單一系列模式下的行動友善佈局
-                for photo in photos_for_member:
-                    
-                    with st.container(border=True): 
-                        
-                        col_image, col_controls = st.columns([0.6, 0.4]) 
-                        
-                        with col_image:
-                            st.image(photo.image_url, caption=f"姿勢: **{photo.pose.value}**") 
-                        
-                        with col_controls:
-                            col_dec, col_input, col_inc = st.columns([0.25, 0.5, 0.25])
-                            
-                            count_key = f"count_{photo.id}_num_input"
-                            if count_key not in st.session_state:
-                                st.session_state[count_key] = photo.owned_count
-
-                            with col_dec:
-                                st.button(
-                                    "➖", 
-                                    key=f"dec_{photo.id}", 
-                                    on_click=decrement_count, 
-                                    args=(photo.id,),
-                                    use_container_width=True,
-                                    type="secondary"
-                                )
-                            
-                            with col_input:
-                                st.number_input(
-                                    "張數", 
-                                    min_value=0,
-                                    value=st.session_state[count_key],
-                                    key=count_key,
-                                    step=1,
-                                    on_change=set_update_tracker,
-                                    args=(photo.id,),
-                                    label_visibility="collapsed",
-                                    help=f"張數: {photo.pose.value}", 
-                                )
-                                
-                            with col_inc:
-                                st.button(
-                                    "➕", 
-                                    key=f"inc_{photo.id}", 
-                                    on_click=increment_count, 
-                                    args=(photo.id,), 
-                                    type="primary",
-                                    use_container_width=True
-                                )
-
-                            with st.expander("🛠️ 自訂圖片 / 清除"):
-                                file_key = f"file_uploader_{photo.id}"
-                                st.file_uploader(
-                                    "上傳自訂圖片 (JPG/PNG)",
-                                    type=["jpg", "jpeg", "png"],
-                                    key=file_key,
-                                    on_change=set_update_tracker, 
-                                    args=(photo.id,),
-                                    accept_multiple_files=False,
-                                    label_visibility="collapsed"
-                                )
-                                col_clear_img, col_clear_count = st.columns(2)
-                                if photo.custom_image_url:
-                                    with col_clear_img:
-                                        st.button("清除圖片", key=f"clear_img_{photo.id}", on_click=clear_custom_image, args=(photo.id,), use_container_width=True)
-                                with col_clear_count:
-                                    st.button("清零張數", key=f"set_zero_{photo.id}", on_click=set_count_to_zero, args=(photo.id,), use_container_width=True)
-
+else:
+    st.info("請先在「管理系列」區塊選擇或新增一個系列來開始追蹤。")
 
 st.markdown("---")
-# D. 管理系列介面 (V8.9.2 成員選擇器優化保留)
+# E. 管理系列介面
 
 st.header("⚙️ 管理系列")
 st.markdown("在這裡新增、編輯或刪除您要追蹤的生寫真系列。")
@@ -1130,12 +1256,15 @@ elif st.session_state.manage_tab_state == "編輯/刪除現有系列":
             edit_options_ids.append(f"{group_value}|{set_name}")
             
     current_edit_id = st.session_state.get("edit_set_id")
-    if current_edit_id not in edit_options_ids:
-        current_edit_id = edit_options_ids[0] if edit_options_ids else None
-        
-    current_index = edit_options_ids.index(current_edit_id) if current_edit_id in edit_options_ids else 0
-
+    
     if edit_options_ids:
+        # 如果有選項，確保 current_edit_id 落在選項範圍內
+        if current_edit_id not in edit_options_ids:
+            current_edit_id = edit_options_ids[0]
+            st.session_state['edit_set_id'] = current_edit_id # 確保 session state 被更新
+            
+        current_index = edit_options_ids.index(current_edit_id) if current_edit_id in edit_options_ids else 0
+
         selected_edit_id = st.selectbox(
             "選擇要編輯或刪除的系列:",
             options=edit_options_ids,
@@ -1145,116 +1274,129 @@ elif st.session_state.manage_tab_state == "編輯/刪除現有系列":
             on_change=load_edit_set_data 
         )
         
-        if not st.session_state.edit_current_group_value or st.session_state.edit_current_group_value != selected_edit_id.split("|", 1)[0]:
-             load_edit_set_data()
-
+        # V8.9.7 修正: 處理 selected_edit_id 為 None 時的流程 (將 return 替換為 st.stop())
+        if selected_edit_id is None:
+             st.info("請在「新增系列」區塊新增至少一個系列。")
+             st.stop() # <--- 修正後的 st.stop()
+             
         if st.session_state.edit_set_id:
-            
-            group_value, set_name = st.session_state.edit_set_id.split("|", 1)
-            
-            st.markdown(f"### 編輯: {group_value} - {set_name}")
-            
-            # --- V8.9.2 成員選擇器 ---
-            available_members = get_available_member_names(group_value)
-            
-            current_selected_members = st.session_state.get('edit_selected_members', [])
-            
-            selected_members_for_edit = st.multiselect(
-                f"選擇要配置姿勢的 {group_value} 成員:",
-                options=available_members,
-                default=current_selected_members, 
-                key="edit_selected_members", 
-                help="只有在這裡選擇的成員，才會顯示在下方進行姿勢設定。"
-            )
-            
-            if not selected_members_for_edit:
-                st.info("請在上方選擇您要配置姿勢的成員。")
-            
-            # --- 為選中的成員動態生成姿勢 Expander ---
-            all_pose_names = [p.name for p in Pose]
-            all_pose_values_map = {p.name: p.value for p in Pose}
-            
-            def format_pose_display(pose_name):
-                return all_pose_values_map.get(pose_name, pose_name)
+             # V8.9.7 修正: 再次檢查 selected_edit_id 是否有效，防止在 selected_edit_id 改變後 session_state.edit_set_id 尚未同步時發生錯誤
+             if st.session_state.edit_set_id is None or "|" not in st.session_state.edit_set_id:
+                 st.info("請選擇有效的系列進行編輯。")
+                 st.stop()
+                 
+             if not st.session_state.edit_current_group_value or st.session_state.edit_current_group_value != st.session_state.edit_set_id.split("|", 1)[0]:
+                 load_edit_set_data()
 
-            st.markdown("#### 點擊成員名稱設定追蹤姿勢")
-            
-            for member_name in selected_members_for_edit:
-                
-                key = f"edit_pose_for_member_{set_name}_{member_name}"
-                
-                if key in st.session_state:
-                    current_selected_poses = st.session_state[key]
-                else:
-                    current_selected_poses = st.session_state.edit_current_members_with_poses.get(member_name, [])
-                    st.session_state[key] = current_selected_poses 
-                
-                
-                if current_selected_poses:
-                    pose_values = [all_pose_values_map.get(p_name, p_name) for p_name in current_selected_poses]
-                    summary = f" (已設定: {', '.join(pose_values)})"
-                    expander_label = f"**{member_name}** {summary}"
-                else:
-                    expander_label = f"**{member_name}** (未設定姿勢)"
-                    
-                with st.expander(expander_label):
-                    
-                    st.multiselect(
-                        "選擇姿勢:",
-                        options=all_pose_names,
-                        default=current_selected_poses, 
-                        key=key, 
-                        format_func=format_pose_display,
-                        label_visibility="visible",
-                        help=f"為 {member_name} 在 {set_name} 系列中設定要追蹤的姿勢。"
-                    )
-            
-            
-            # --- 預覽與儲存 ---
-            
-            preview_members_with_poses = {}
-            for member_name in selected_members_for_edit:
-                key = f"edit_pose_for_member_{set_name}_{member_name}"
-                selected_poses = st.session_state.get(key, [])
-                if selected_poses:
-                    preview_members_with_poses[member_name] = [all_pose_values_map.get(p_name, p_name) for p_name in selected_poses]
+             group_value, set_name = st.session_state.edit_set_id.split("|", 1)
+             
+             st.markdown(f"### 編輯: {group_value} - {set_name}")
+             
+             # --- 成員選擇器 ---
+             available_members = get_available_member_names(group_value)
+             
+             current_selected_members = st.session_state.get('edit_selected_members', [])
+             
+             selected_members_for_edit = st.multiselect(
+                 f"選擇要配置姿勢的 {group_value} 成員:",
+                 options=available_members,
+                 default=current_selected_members, 
+                 key="edit_selected_members", 
+                 help="只有在這裡選擇的成員，才會顯示在下方進行姿勢設定。"
+             )
+             
+             if not selected_members_for_edit:
+                 st.info("請在上方選擇您要配置姿勢的成員。")
+             
+             # --- 為選中的成員動態生成姿勢 Expander ---
+             all_pose_names = [p.name for p in Pose]
+             all_pose_values_map = {p.name: p.value for p in Pose}
+             
+             def format_pose_display(pose_name):
+                 return all_pose_values_map.get(pose_name, pose_name)
 
-            st.markdown("#### 變更預覽")
-            
-            preview_data = {
-                "所屬團體": group_value,
-                "系列名稱": set_name,
-                "成員與追蹤姿勢": preview_members_with_poses,
-                "總追蹤生寫真數量": sum(len(poses) for poses in preview_members_with_poses.values())
-            }
-            with st.expander("展開查看詳細預覽 (JSON)"):
-                st.json(preview_data)
+             st.markdown("#### 點擊成員名稱設定追蹤姿勢")
+             
+             for member_name in selected_members_for_edit:
+                 
+                 key = f"edit_pose_for_member_{set_name}_{member_name}"
+                 
+                 if key in st.session_state:
+                     current_selected_poses = st.session_state[key]
+                 else:
+                     current_selected_poses = st.session_state.edit_current_members_with_poses.get(member_name, [])
+                     st.session_state[key] = current_selected_poses 
+                 
+                 
+                 if current_selected_poses:
+                     pose_values = [all_pose_values_map.get(p_name, p_name) for p_name in current_selected_poses]
+                     summary = f" (已設定: {', '.join(pose_values)})"
+                     expander_label = f"**{member_name}** {summary}"
+                 else:
+                     expander_label = f"**{member_name}** (未設定姿勢)"
+                     
+                 with st.expander(expander_label):
+                     
+                     st.multiselect(
+                         "選擇姿勢:",
+                         options=all_pose_names,
+                         default=current_selected_poses, 
+                         key=key, 
+                         format_func=format_pose_display,
+                         label_visibility="visible",
+                         help=f"為 {member_name} 在 {set_name} 系列中設定要追蹤的姿勢。"
+                     )
+             
+             
+             # --- 預覽與儲存 ---
+             
+             preview_members_with_poses = {}
+             for member_name in selected_members_for_edit:
+                 key = f"edit_pose_for_member_{set_name}_{member_name}"
+                 selected_poses = st.session_state.get(key, [])
+                 if selected_poses:
+                     preview_members_with_poses[member_name] = [all_pose_values_map.get(p_name, p_name) for p_name in selected_poses]
 
-            col_update, col_delete = st.columns([0.7, 0.3])
-            
-            with col_update:
-                st.button(
-                    "✅ 更新此系列",
-                    on_click=edit_existing_set,
-                    type="primary",
-                    use_container_width=True
-                )
-            
-            with col_delete:
-                if st.button("❌ 刪除此系列", use_container_width=True):
-                    if st.session_state.get('confirm_delete', False):
-                        delete_existing_set_on_edit()
-                        st.session_state['confirm_delete'] = False
-                    else:
-                        st.warning("⚠️ 再次點擊以確認刪除，此操作無法復原！")
-                        st.session_state['confirm_delete'] = True
-                else:
-                    st.session_state['confirm_delete'] = False
+             st.markdown("#### 變更預覽")
+             
+             preview_data = {
+                 "所屬團體": group_value,
+                 "系列名稱": set_name,
+                 "成員與追蹤姿勢": preview_members_with_poses,
+                 "總追蹤生寫真數量": sum(len(poses) for poses in preview_members_with_poses.values())
+             }
+             with st.expander("展開查看詳細預覽 (JSON)"):
+                 st.json(preview_data)
 
-            if st.session_state.get('delete_success_flag'):
-                st.success(st.session_state['delete_success_flag'])
-                st.button("點擊這裡更新介面", on_click=hard_reload_after_delete)
-                
+             col_update, col_delete = st.columns([0.7, 0.3])
+             
+             with col_update:
+                 st.button(
+                     "✅ 更新此系列",
+                     on_click=edit_existing_set,
+                     type="primary",
+                     use_container_width=True
+                 )
+             
+             with col_delete:
+                 delete_clicked = st.button("❌ 刪除此系列", key="delete_set_button", use_container_width=True)
+                 
+                 if delete_clicked:
+                     if st.session_state.get('confirm_delete', False):
+                         delete_existing_set_on_edit()
+                         st.session_state['confirm_delete'] = False
+                     else:
+                         st.warning("⚠️ 再次點擊以確認刪除，此操作無法復原！")
+                         st.session_state['confirm_delete'] = True
+                 else:
+                     st.session_state['confirm_delete'] = False
+
+             if st.session_state.get('delete_success_flag'):
+                 st.success(st.session_state['delete_success_flag'])
+                 # 在刪除成功後顯示一個按鈕，由它來觸發 final_reload
+                 if st.session_state.get('reload_after_delete_trigger', False):
+                     st.button("點擊這裡更新介面", on_click=hard_reload_after_delete)
+                     st.session_state['reload_after_delete_trigger'] = False
             
     else:
         st.info("目前沒有可編輯的系列，請在「新增系列」區塊建立一個。")
