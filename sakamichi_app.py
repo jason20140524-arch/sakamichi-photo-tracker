@@ -325,10 +325,10 @@ def load_data(initial_load=False):
 
 
 # --- 3. 函數區：單張/批量操作 ---
-# V8.9.6 修正: 從所有回調函數中移除 st.rerun()
+# V9.4 修正: 將張數更新與檔案上傳邏輯徹底分離
 
-def update_photo_and_save():
-    """處理圖片張數/檔案上傳的變更並儲存 (主要用於 on_change 觸發，尤其是檔案上傳/number_input)"""
+def update_photo_count_and_save():
+    """處理圖片張數的變更並儲存 (只用於 number_input 觸發)"""
     photo_id = st.session_state.get('last_updated_photo_id')
     if not photo_id:
         return 
@@ -336,49 +336,60 @@ def update_photo_and_save():
     updated_photo = next((ph for ph in st.session_state.photo_set if ph.id == photo_id), None)
     
     if updated_photo:
-        
         # 1. 處理張數 (如果 number_input 被修改)
+        # 讀取 number_input 的最新值
         new_count = max(0, st.session_state.get(f"count_{photo_id}_num_input", updated_photo.owned_count))
         
-        # 2. 處理檔案上傳
-        uploaded_file = st.session_state.get(f"file_uploader_{photo_id}")
+        is_changed = (new_count != updated_photo.owned_count)
         
-        new_custom_image_source = None
-        
-        if uploaded_file is not None:
+        if is_changed:
+            updated_photo.owned_count = new_count
+            save_data(st.session_state.photo_set, st.session_state.all_sets_by_group)
+            # 確保 session state 中的 number_input 值與實際儲存值一致
+            st.session_state[f"count_{photo_id}_num_input"] = updated_photo.owned_count 
+
+def set_update_count_tracker(p_id):
+    """設置追蹤器，確保 on_change 能找到正確的 ID。用於 number_input。"""
+    st.session_state['last_updated_photo_id'] = p_id
+    update_photo_count_and_save()
+
+
+def update_photo_file_and_save(photo_id: str):
+    """V9.4 修正: 處理圖片檔案上傳的變更並儲存，只在 file_uploader 變動時呼叫。"""
+    
+    updated_photo = next((ph for ph in st.session_state.photo_set if ph.id == photo_id), None)
+    
+    if updated_photo is None:
+        return 
+
+    # 1. 處理檔案上傳
+    uploaded_file = st.session_state.get(f"file_uploader_{photo_id}")
+    
+    new_custom_image_source = None
+    
+    if uploaded_file is not None:
+        try:
+            # 嘗試重置檔案讀取指標，提高穩定性
+            uploaded_file.seek(0) 
             bytes_data = uploaded_file.read()
             file_type = uploaded_file.type
             base64_encoded_data = base64.b64encode(bytes_data).decode('utf-8')
             new_custom_image_source = f"data:{file_type};base64,{base64_encoded_data}"
-        
-        # 如果 file_uploader 狀態是 None (但之前有 custom_image)，則不修改 custom_image_url。
-        # 只有在明確上傳新文件時才更新 new_custom_image_source。
-        
-        is_changed = (
-            new_count != updated_photo.owned_count or 
-            (new_custom_image_source is not None and new_custom_image_source != updated_photo.custom_image_url) 
-        )
-        
-        if is_changed:
-            updated_photo.owned_count = new_count
-            
-            if new_custom_image_source is not None:
-                updated_photo.custom_image_url = new_custom_image_source
-                updated_photo.image_url = new_custom_image_source
-            
-            save_data(st.session_state.photo_set, st.session_state.all_sets_by_group)
-            
-            st.session_state[f"count_{photo_id}_num_input"] = updated_photo.owned_count 
-            
-            # 這裡不呼叫 rerun，讓 Streamlit 自動處理 number_input 或 file_uploader 變更後的刷新
-            # file_uploader 成功上傳後會自行重置
-            
+        except Exception:
+            # 在行動裝置上，檔案讀取失敗時靜默跳過，不影響其他操作
+            return
 
-def set_update_tracker(p_id):
-    """設置追蹤器，確保 on_change 能找到正確的 ID。用於 number_input 和 file_uploader。"""
-    st.session_state['last_updated_photo_id'] = p_id
-    update_photo_and_save()
-
+    # 2. 只有當新圖片源存在且與舊的不同時才更新
+    if new_custom_image_source is not None and new_custom_image_source != updated_photo.custom_image_url:
+        updated_photo.custom_image_url = new_custom_image_source
+        updated_photo.image_url = new_custom_image_source
+        
+        # 保存數據
+        save_data(st.session_state.photo_set, st.session_state.all_sets_by_group)
+        
+def set_update_file_tracker(p_id):
+    """設置追蹤器，並呼叫專門處理檔案上傳的函數。"""
+    update_photo_file_and_save(p_id)
 
 def decrement_count(p_id):
     """將數量減 1，只修改狀態並儲存，依賴 Streamlit 自動刷新。"""
@@ -1110,7 +1121,8 @@ if selected_set:
                                             value=st.session_state[count_key],
                                             key=count_key,
                                             step=1,
-                                            on_change=set_update_tracker,
+                                            # V9.4 修正: 使用專門的數量更新追蹤器
+                                            on_change=set_update_count_tracker,
                                             args=(photo.id,),
                                             label_visibility="collapsed",
                                             help=f"張數: {photo.pose.value}", 
@@ -1143,7 +1155,8 @@ if selected_set:
                                             "上傳自訂圖片 (JPG/PNG)",
                                             type=["jpg", "jpeg", "png"],
                                             key=file_key,
-                                            on_change=set_update_tracker, 
+                                            # V9.4 修正: 使用專門的檔案更新追蹤器
+                                            on_change=set_update_file_tracker, 
                                             args=(photo.id,),
                                             accept_multiple_files=False,
                                             label_visibility="collapsed"
@@ -1190,7 +1203,8 @@ if selected_set:
                                         value=st.session_state[count_key],
                                         key=count_key,
                                         step=1,
-                                        on_change=set_update_tracker,
+                                        # V9.4 修正: 使用專門的數量更新追蹤器
+                                        on_change=set_update_count_tracker,
                                         args=(photo.id,),
                                         label_visibility="collapsed",
                                         help=f"張數: {photo.pose.value}", 
@@ -1222,7 +1236,8 @@ if selected_set:
                                         "上傳自訂圖片 (JPG/PNG)",
                                         type=["jpg", "jpeg", "png"],
                                         key=file_key,
-                                        on_change=set_update_tracker, 
+                                        # V9.4 修正: 使用專門的檔案更新追蹤器
+                                        on_change=set_update_file_tracker, 
                                         args=(photo.id,),
                                         accept_multiple_files=False,
                                         label_visibility="collapsed"
