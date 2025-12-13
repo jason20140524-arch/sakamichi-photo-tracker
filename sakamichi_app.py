@@ -159,7 +159,6 @@ class Member:
 
 class Photo:
     # 圖片基底網址 (!!!請自行替換為您圖片的公開網址!!!)
-    # 範例：如果您的圖片是 mydomain.com/images/sakamichi/member_setname_yori.jpg
     BASE_IMAGE_URL = "https://example.com/images/sakamichi/" 
 
     def __init__(self, set_name: str, member: Member, pose: Pose, owned_count: int = 0, custom_image_url: Optional[str] = None):
@@ -358,9 +357,9 @@ def update_photo_and_save():
         
         if is_changed:
             
-            if uploaded_file is not None:
-                st.session_state[f"file_uploader_{photo_id}"] = None 
-                
+            # --- 修正點 1: 移除 st.session_state[f"file_uploader_{photo_id}"] = None ---
+            # Streamlit 不允許手動設定 file_uploader 的狀態
+            
             updated_photo.owned_count = new_count
             
             updated_photo.custom_image_url = new_custom_image_source
@@ -371,7 +370,7 @@ def update_photo_and_save():
             st.session_state[f"count_{photo_id}_num_input"] = updated_photo.owned_count 
             
             if uploaded_file is not None:
-                st.rerun()
+                st.rerun() # 成功上傳後強制刷新，file_uploader 狀態會自動清空
 
 
 def set_update_tracker(p_id):
@@ -418,7 +417,8 @@ def clear_custom_image(photo_id: str):
         updated_photo.custom_image_url = None
         updated_photo.image_url = updated_photo._generate_image_url()
         
-        st.session_state[f"file_uploader_{photo_id}"] = None 
+        # --- 修正點 2: 移除 st.session_state[f"file_uploader_{photo_id}"] = None ---
+        # Streamlit 不允許手動設定 file_uploader 的狀態
         
         save_data(st.session_state.photo_set, st.session_state.all_sets_by_group)
         
